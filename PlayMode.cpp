@@ -12,23 +12,23 @@
 
 #include <random>
 
-GLuint hexapod_meshes_for_lit_color_texture_program = 0;
-Load< MeshBuffer > hexapod_meshes(LoadTagDefault, []() -> MeshBuffer const * {
-	MeshBuffer const *ret = new MeshBuffer(data_path("hexapod.pnct"));
-	hexapod_meshes_for_lit_color_texture_program = ret->make_vao_for_program(lit_color_texture_program->program);
+GLuint cave_meshes_for_lit_color_texture_program = 0;
+Load< MeshBuffer > cave_meshes(LoadTagDefault, []() -> MeshBuffer const * {
+	MeshBuffer const *ret = new MeshBuffer(data_path("cave-cart.pnct"));
+	cave_meshes_for_lit_color_texture_program = ret->make_vao_for_program(lit_color_texture_program->program);
 	return ret;
 });
 
-Load< Scene > hexapod_scene(LoadTagDefault, []() -> Scene const * {
-	return new Scene(data_path("hexapod.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
-		Mesh const &mesh = hexapod_meshes->lookup(mesh_name);
+Load< Scene > cave_scene(LoadTagDefault, []() -> Scene const * {
+	return new Scene(data_path("cave-cart.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
+		Mesh const &mesh = cave_meshes->lookup(mesh_name);
 
 		scene.drawables.emplace_back(transform);
 		Scene::Drawable &drawable = scene.drawables.back();
 
 		drawable.pipeline = lit_color_texture_program_pipeline;
 
-		drawable.pipeline.vao = hexapod_meshes_for_lit_color_texture_program;
+		drawable.pipeline.vao = cave_meshes_for_lit_color_texture_program;
 		drawable.pipeline.type = mesh.type;
 		drawable.pipeline.start = mesh.start;
 		drawable.pipeline.count = mesh.count;
@@ -36,38 +36,28 @@ Load< Scene > hexapod_scene(LoadTagDefault, []() -> Scene const * {
 	});
 });
 
-Load< Sound::Sample > dusty_floor_sample(LoadTagDefault, []() -> Sound::Sample const * {
-	return new Sound::Sample(data_path("dusty-floor.opus"));
-});
+//returns a loader that opens one sound file, all are 48kHz mono float WAVs
+static std::function< Sound::Sample const *() > sample_loader(std::string const &file) {
+	return [file]() -> Sound::Sample const * { return new Sound::Sample(data_path(file)); };
+}
+
+Load< Sound::Sample > cart_slow_sample (LoadTagDefault, sample_loader("sounds/cart-moving-slowly.wav"));
+Load< Sound::Sample > cart_fast_sample (LoadTagDefault, sample_loader("sounds/cart-moving-quickly.wav"));
+Load< Sound::Sample > bats_sample      (LoadTagDefault, sample_loader("sounds/bats.wav"));
+Load< Sound::Sample > rocks_sample     (LoadTagDefault, sample_loader("sounds/rocks-loose.wav"));
+Load< Sound::Sample > hit_bats_sample  (LoadTagDefault, sample_loader("sounds/hit-by-bats.wav"));
+Load< Sound::Sample > hit_rocks_sample (LoadTagDefault, sample_loader("sounds/hit-by-rocks.wav"));
+Load< Sound::Sample > avoid_sample     (LoadTagDefault, sample_loader("sounds/avoid-sound.wav"));
+Load< Sound::Sample > game_end_sample  (LoadTagDefault, sample_loader("sounds/game-end.wav"));
 
 
-Load< Sound::Sample > honk_sample(LoadTagDefault, []() -> Sound::Sample const * {
-	return new Sound::Sample(data_path("honk.wav"));
-});
-
-
-PlayMode::PlayMode() : scene(*hexapod_scene) {
-	//get pointers to leg for convenience:
-	for (auto &transform : scene.transforms) {
-		if (transform.name == "Hip.FL") hip = &transform;
-		else if (transform.name == "UpperLeg.FL") upper_leg = &transform;
-		else if (transform.name == "LowerLeg.FL") lower_leg = &transform;
-	}
-	if (hip == nullptr) throw std::runtime_error("Hip not found.");
-	if (upper_leg == nullptr) throw std::runtime_error("Upper leg not found.");
-	if (lower_leg == nullptr) throw std::runtime_error("Lower leg not found.");
-
-	hip_base_rotation = hip->rotation;
-	upper_leg_base_rotation = upper_leg->rotation;
-	lower_leg_base_rotation = lower_leg->rotation;
-
-	//get pointer to camera for convenience:
+PlayMode::PlayMode() : scene(*cave_scene) {
+	//get pointer to the fixed forward camera:
 	if (scene.cameras.size() != 1) throw std::runtime_error("Expecting scene to have exactly one camera, but it has " + std::to_string(scene.cameras.size()));
 	camera = &scene.cameras.front();
 
-	//start music loop playing:
-	// (note: position will be over-ridden in update())
-	leg_tip_loop = Sound::loop_3D(*dusty_floor_sample, 1.0f, get_leg_tip_position(), 10.0f);
+	//cart rumble follows the cart; position set every update():
+	cart_loop = Sound::loop_3D(*cart_slow_sample, 0.6f, glm::vec3(0.0f, 0.0f, 0.0f), 8.0f);
 }
 
 PlayMode::~PlayMode() {
@@ -96,8 +86,9 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			down.pressed = true;
 			return true;
 		} else if (evt.key.key == SDLK_SPACE) {
-			if (honk_oneshot) honk_oneshot->stop();
-			honk_oneshot = Sound::play_3D(*honk_sample, 0.3f, glm::vec3(4.6f, -7.8f, 6.9f)); //hardcoded position of front of car, from blender
+			if (warning_oneshot) warning_oneshot->stop();
+			//test warning from the left tunnel mouth (Tunnel_Left_ROOT sits at x=-4, y=8):
+			warning_oneshot = Sound::play_3D(*bats_sample, 1.0f, glm::vec3(-4.0f, 8.0f, 1.0f), 6.0f);
 		}
 	} else if (evt.type == SDL_EVENT_KEY_UP) {
 		if (evt.key.key == SDLK_A) {
@@ -138,25 +129,8 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 
 void PlayMode::update(float elapsed) {
 
-	//slowly rotates through [0,1):
-	wobble += elapsed / 10.0f;
-	wobble -= std::floor(wobble);
-
-	hip->rotation = hip_base_rotation * glm::angleAxis(
-		glm::radians(5.0f * std::sin(wobble * 2.0f * float(M_PI))),
-		glm::vec3(0.0f, 1.0f, 0.0f)
-	);
-	upper_leg->rotation = upper_leg_base_rotation * glm::angleAxis(
-		glm::radians(7.0f * std::sin(wobble * 2.0f * 2.0f * float(M_PI))),
-		glm::vec3(0.0f, 0.0f, 1.0f)
-	);
-	lower_leg->rotation = lower_leg_base_rotation * glm::angleAxis(
-		glm::radians(10.0f * std::sin(wobble * 3.0f * 2.0f * float(M_PI))),
-		glm::vec3(0.0f, 0.0f, 1.0f)
-	);
-
-	//move sound to follow leg tip position:
-	leg_tip_loop->set_position(get_leg_tip_position(), 1.0f / 60.0f);
+	//keep the cart rumble at the camera's feet for now:
+	cart_loop->set_position(camera->transform->position + glm::vec3(0.0f, 0.0f, -1.0f));
 
 	//move camera:
 	{
@@ -237,9 +211,4 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 			glm::u8vec4(0xff, 0xff, 0xff, 0x00));
 	}
 	GL_ERRORS();
-}
-
-glm::vec3 PlayMode::get_leg_tip_position() {
-	//the vertex position here was read from the model in blender:
-	return lower_leg->make_world_from_local() * glm::vec4(-1.26137f, -11.861f, 0.0f, 1.0f);
 }
