@@ -127,6 +127,18 @@ if (maek.OS === 'windows') {
 	copies.push( maek.COPY(`${NEST_LIBS}/SDL3/dist/SDL3.dll`, `scenes/SDL3.dll`) );
 }
 
+for (const name of ['cave-cart.pnct', 'cave-cart.scene', 'tunnel-cart.pnct', 'tunnel-cart.scene', 'bat.pnct', 'rock.pnct', 'cart-front.pnct']) {
+	copies.push(maek.COPY(`assets/${name}`, `dist/${name}`));
+}
+for (const name of ['bats', 'rocks-loose', 'cart-moving-slowly', 'cart-moving-quickly']) {
+	copies.push(maek.COPY(`sounds/env/${name}.wav`, `dist/sounds/${name}.wav`));
+}
+for (const name of ['hit-by-bats', 'hit-by-rocks', 'avoid-sound', 'game-end']) {
+	copies.push(maek.COPY(`sounds/player/${name}.wav`, `dist/sounds/${name}.wav`));
+}
+
+// 
+
 //call rules on the maek object to specify tasks.
 // rules generally look like:
 //  output = maek.RULE_NAME(input [, output] [, {options}])
