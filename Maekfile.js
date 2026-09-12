@@ -127,7 +127,7 @@ if (maek.OS === 'windows') {
 	copies.push( maek.COPY(`${NEST_LIBS}/SDL3/dist/SDL3.dll`, `scenes/SDL3.dll`) );
 }
 
-for (const name of ['cave-cart.pnct', 'cave-cart.scene', 'tunnel-cart.pnct', 'tunnel-cart.scene', 'bat.pnct', 'rock.pnct', 'cart-front.pnct']) {
+for (const name of ['cave-cart.pnct', 'cave-cart.scene', 'tunnel-cart.pnct', 'tunnel-cart.scene', 'bat.pnct', 'bat.scene', 'rock.pnct', 'rock.scene', 'cart-front.pnct', 'cart-front.scene']) {
 	copies.push(maek.COPY(`assets/${name}`, `dist/${name}`));
 }
 for (const name of ['bats', 'rocks-loose', 'cart-moving-slowly', 'cart-moving-quickly']) {

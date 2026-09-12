@@ -13,22 +13,22 @@ endif
 EXPORT_MESHES=export-meshes.py
 EXPORT_SCENE=export-scene.py
 
-DIST=../dist
+ASSET=../assets
 
 all : \
-	$(DIST)/cave-cart.pnct \
-	$(DIST)/cave-cart.scene \
-	$(DIST)/tunnel-cart.pnct \
-	$(DIST)/tunnel-cart.scene \
+	$(ASSET)/cave-cart.pnct \
+	$(ASSET)/cave-cart.scene \
+	$(ASSET)/tunnel-cart.pnct \
+	$(ASSET)/tunnel-cart.scene \
 
 
-$(DIST)/cave-cart.scene : cave-mine-cart.blend $(EXPORT_SCENE)
+$(ASSET)/cave-cart.scene : cave-mine-cart.blend $(EXPORT_SCENE)
 	$(BLENDER) --background --python $(EXPORT_SCENE) -- '$<':Main '$@'
 
-$(DIST)/cave-cart.pnct : cave-mine-cart.blend $(EXPORT_MESHES)
+$(ASSET)/cave-cart.pnct : cave-mine-cart.blend $(EXPORT_MESHES)
 	$(BLENDER) --background --python $(EXPORT_MESHES) -- '$<':Main '$@'
-$(DIST)/tunnel-cart.scene : cave-tunnel.blend $(EXPORT_SCENE)
+$(ASSET)/tunnel-cart.scene : cave-tunnel.blend $(EXPORT_SCENE)
 	$(BLENDER) --background --python $(EXPORT_SCENE) -- '$<':Main '$@'
 
-$(DIST)/tunnel-cart.pnct : cave-tunnel.blend $(EXPORT_MESHES)
+$(ASSET)/tunnel-cart.pnct : cave-tunnel.blend $(EXPORT_MESHES)
 	$(BLENDER) --background --python $(EXPORT_MESHES) -- '$<':Main '$@'
