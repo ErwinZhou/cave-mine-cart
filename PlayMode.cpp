@@ -138,7 +138,7 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 }
 
 void PlayMode::update(float elapsed) {
-	cart_s += Speed * elapsed;
+	cart_s += (phase == Phase::Tunnel ? TunnelSpeed : Speed) * elapsed;
 
 	if (phase == Phase::Approach) {
 		if (cart_s >= SplitY) begin_phase(Phase::Branch);

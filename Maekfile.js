@@ -147,7 +147,10 @@ for (const name of ['hit-by-bats', 'hit-by-rocks', 'avoid-sound', 'game-end']) {
 // cppFile: name of c++ file to compile
 // objFileBase (optional): base name object file to produce (if not supplied, set to options.objDir + '/' + cppFile without the extension)
 //returns objFile: objFileBase + a platform-dependant suffix ('.o' or '.obj')
+const mine_logic_obj = maek.CPP('MineCartLogic.cpp');
+
 const game_names = [
+	mine_logic_obj,
 	maek.CPP('PlayMode.cpp'),
 	maek.CPP('main.cpp'),
 	maek.CPP('LitColorTextureProgram.cpp'),
@@ -171,6 +174,17 @@ const common_names = [
 	maek.CPP('GL.cpp'),
 	maek.CPP('Load.cpp')
 ];
+
+//standalone rules tests: no graphics libraries and no asset files required.
+const mine_logic_test = maek.LINK([
+	mine_logic_obj, maek.CPP('tests/MineCartLogicTest.cpp')
+], 'objs/mine-logic-test', { LINKLibs: [] });
+const test_logic = async () => {
+	await maek.run([`./${mine_logic_test}`], 'TEST mine cart logic');
+};
+test_logic.depends = [mine_logic_test];
+test_logic.label = 'TEST mine cart logic';
+maek.tasks[':test-logic'] = test_logic;
 
 const show_meshes_names = [
 	maek.CPP('show-meshes.cpp'),

@@ -2,6 +2,7 @@
 
 #include "Scene.hpp"
 #include "Sound.hpp"
+#include "MineCartLogic.hpp"
 
 #include <glm/glm.hpp>
 
@@ -27,7 +28,10 @@ struct PlayMode : Mode {
 	static constexpr float LaneX[3] = { -4.0f, 0.0f, 4.0f };
 	static constexpr float LaneYaw[3] = { 0.6196f, 0.0f, -0.6196f }; //atan(4.0/5.6)
 
-	static constexpr float Speed = 1.5f;
+	static constexpr float Speed = 1.0f;       //approach and branch: the player is deciding
+	static constexpr float TunnelSpeed = 3.0f; //tunnel: nothing to decide, so get it over with
+	static_assert(Speed >= mine::MinSpeed && Speed <= mine::MaxSpeed);
+	static_assert(TunnelSpeed >= mine::MinSpeed && TunnelSpeed <= mine::MaxSpeed);
 
 	enum class Phase {
 		Approach, //shared straight, lane still changeable
