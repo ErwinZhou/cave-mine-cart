@@ -27,6 +27,7 @@ struct PlayMode : Mode {
 	static constexpr float TunnelLength = 16.0f;
 	static constexpr float LaneX[3] = { -4.0f, 0.0f, 4.0f };
 	static constexpr float LaneYaw[3] = { 0.6196f, 0.0f, -0.6196f }; //atan(4.0/5.6)
+	static constexpr float LookLean = 0.22f; //how far the camera turns toward the chosen mouth
 
 	static constexpr float Speed = 1.0f;       //approach and branch: the player is deciding
 	static constexpr float TunnelSpeed = 3.0f; //tunnel: nothing to decide, so get it over with
@@ -47,6 +48,8 @@ struct PlayMode : Mode {
 
 	float cart_x = 0.0f;
 	float cart_yaw = 0.0f;
+	//the camera leans toward the chosen lane before the split, when the cart itself cannot:
+	float cam_yaw = 0.0f;
 
 	int junctions_cleared = 0;
 
@@ -61,6 +64,7 @@ struct PlayMode : Mode {
 	Scene cart;     //cart-front, panels already parented to cart_root in Blender
 
 	Scene::Camera *camera = nullptr;
+	glm::quat camera_base_rotation; //the scene's own "look down +Y", yawed away from each frame
 	Scene::Transform *cart_root = nullptr;
 
 	std::shared_ptr< Sound::PlayingSample > cart_loop;

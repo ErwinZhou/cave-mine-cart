@@ -72,6 +72,7 @@ PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_
 		throw std::runtime_error("Expecting cave-cart to have exactly one camera, but it has " + std::to_string(junction.cameras.size()));
 	}
 	camera = &junction.cameras.front();
+	camera_base_rotation = camera->transform->rotation;
 
 	//cave-cart has a cart modelled into it; without this it draws on top of cart-front's:
 	for (auto d = junction.drawables.begin(); d != junction.drawables.end(); /* below */) {
@@ -112,7 +113,10 @@ void PlayMode::place_cart_and_camera() {
 	cart_root->position = glm::vec3(cart_x, cart_s + CartRootOffset, 0.0f);
 	cart_root->rotation = glm::angleAxis(cart_yaw, glm::vec3(0.0f, 0.0f, 1.0f));
 
-	camera->transform->position = glm::vec3(cart_x, cart_s - CameraBack, 1.65f);
+	//behind the cart along its heading, not straight south, or a turn swings the cart out of frame:
+	glm::vec3 forward = glm::vec3(-std::sin(cam_yaw), std::cos(cam_yaw), 0.0f);
+	camera->transform->position = glm::vec3(cart_x, cart_s, 1.65f) - CameraBack * forward;
+	camera->transform->rotation = glm::angleAxis(cam_yaw, glm::vec3(0.0f, 0.0f, 1.0f)) * camera_base_rotation;
 }
 
 bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size) {
@@ -154,19 +158,22 @@ void PlayMode::update(float elapsed) {
 	{ //ease toward the lane so a switch reads as following a rail rather than sliding sideways:
 		float want_x = 0.0f;
 		float want_yaw = 0.0f;
+		float want_cam_yaw = 0.0f;
 		if (phase == Phase::Approach) {
-			want_x = LaneX[target_lane] * 0.25f;
-			want_yaw = LaneYaw[target_lane] * 0.25f;
+			//the three rails are still one track here, so only the camera turns:
+			want_cam_yaw = LookLean * float(1 - target_lane);
 		} else if (phase == Phase::Branch) {
 			float t = (cart_s - SplitY) / (BranchEndY - SplitY);
 			want_x = LaneX[locked_lane] * t;
 			want_yaw = LaneYaw[locked_lane];
+			want_cam_yaw = want_yaw;
 		}
 
 		//covers about 90% of the gap in 0.2 seconds
 		float k = 1.0f - std::exp(-elapsed / 0.09f);
 		cart_x += k * (want_x - cart_x);
 		cart_yaw += k * (want_yaw - cart_yaw);
+		cam_yaw += k * (want_cam_yaw - cam_yaw);
 	}
 
 	place_cart_and_camera();
@@ -204,33 +211,33 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	else junction.draw(*camera);
 	cart.draw(*camera);
 
-	{
-		glDisable(GL_DEPTH_TEST);
-		float aspect = float(drawable_size.x) / float(drawable_size.y);
-		DrawLines lines(glm::mat4(
-			1.0f / aspect, 0.0f, 0.0f, 0.0f,
-			0.0f, 1.0f, 0.0f, 0.0f,
-			0.0f, 0.0f, 1.0f, 0.0f,
-			0.0f, 0.0f, 0.0f, 1.0f
-		));
+	// {
+	// 	glDisable(GL_DEPTH_TEST);
+	// 	float aspect = float(drawable_size.x) / float(drawable_size.y);
+	// 	DrawLines lines(glm::mat4(
+	// 		1.0f / aspect, 0.0f, 0.0f, 0.0f,
+	// 		0.0f, 1.0f, 0.0f, 0.0f,
+	// 		0.0f, 0.0f, 1.0f, 0.0f,
+	// 		0.0f, 0.0f, 0.0f, 1.0f
+	// 	));
 
-		char const *phase_name = (phase == Phase::Approach ? "APPROACH"
-		                        : phase == Phase::Branch   ? "BRANCH" : "TUNNEL");
-		std::string hud = std::string(phase_name)
-			+ "  lane " + std::to_string(target_lane)
-			+ "  y " + std::to_string(int(cart_s))
-			+ "  cleared " + std::to_string(junctions_cleared);
+	// 	char const *phase_name = (phase == Phase::Approach ? "APPROACH"
+	// 	                        : phase == Phase::Branch   ? "BRANCH" : "TUNNEL");
+	// 	std::string hud = std::string(phase_name)
+	// 		+ "  lane " + std::to_string(target_lane)
+	// 		+ "  y " + std::to_string(int(cart_s))
+	// 		+ "  cleared " + std::to_string(junctions_cleared);
 
-		constexpr float H = 0.09f;
-		lines.draw_text(hud,
-			glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
-			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-			glm::u8vec4(0x00, 0x00, 0x00, 0x00));
-		float ofs = 2.0f / drawable_size.y;
-		lines.draw_text(hud,
-			glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
-			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-			glm::u8vec4(0xff, 0xff, 0xff, 0x00));
-	}
+	// 	constexpr float H = 0.09f;
+	// 	lines.draw_text(hud,
+	// 		glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
+	// 		glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+	// 		glm::u8vec4(0x00, 0x00, 0x00, 0x00));
+	// 	float ofs = 2.0f / drawable_size.y;
+	// 	lines.draw_text(hud,
+	// 		glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
+	// 		glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
+	// 		glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+	// }
 	GL_ERRORS();
 }

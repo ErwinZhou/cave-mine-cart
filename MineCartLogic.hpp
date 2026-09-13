@@ -15,7 +15,7 @@ constexpr int RockDamage = 5;
 //the cart is always rolling; the player may slow down but never stop or reverse:
 constexpr float MinSpeed = 1.0f;
 constexpr float MaxSpeed = 5.0f;
-constexpr float TunnelSpeed = 3.0f;
+constexpr float TunnelSpeed = 4.0f;
 
 constexpr int LaneCount = 3;
 
