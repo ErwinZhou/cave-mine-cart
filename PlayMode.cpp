@@ -197,10 +197,15 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	glUseProgram(lit_color_texture_program->program);
 	glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
 	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
-	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
+	//a lone overhead hemi gives a face's top 1.0 and its side 0.5, so the same brown reads as two
+	//browns depending on viewing angle; most of the light is ambient to keep that ratio near 1
+	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(0.40f, 0.40f, 0.38f)));
+	glUniform3fv(lit_color_texture_program->LIGHT_AMBIENT_vec3, 1, glm::value_ptr(glm::vec3(0.62f, 0.60f, 0.56f)));
 	glUseProgram(0);
 
-	glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+	//the tunnel bores are open pipes, so this is what shows through them: keep it the rock's
+	//hue or the far end reads as a hole punched in the world rather than depth
+	glClearColor(0.030f, 0.027f, 0.023f, 1.0f);
 	glClearDepth(1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
