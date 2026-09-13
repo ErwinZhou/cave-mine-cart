@@ -27,7 +27,7 @@ struct PlayMode : Mode {
 	static constexpr float LaneX[3] = { -4.0f, 0.0f, 4.0f };
 	static constexpr float LaneYaw[3] = { 0.6196f, 0.0f, -0.6196f }; //atan(4.0/5.6)
 
-	static constexpr float Speed = 8.0f;
+	static constexpr float Speed = 1.5f;
 
 	enum class Phase {
 		Approach, //shared straight, lane still changeable
