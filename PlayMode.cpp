@@ -9,34 +9,41 @@
 #include "data_path.hpp"
 
 #include <glm/gtc/type_ptr.hpp>
+#include <glm/gtc/quaternion.hpp>
 
 #include <random>
 
-GLuint cave_meshes_for_lit_color_texture_program = 0;
-Load< MeshBuffer > cave_meshes(LoadTagDefault, []() -> MeshBuffer const * {
-	MeshBuffer const *ret = new MeshBuffer(data_path("cave-cart.pnct"));
-	cave_meshes_for_lit_color_texture_program = ret->make_vao_for_program(lit_color_texture_program->program);
-	return ret;
-});
+struct MeshSet {
+	MeshBuffer const *buffer = nullptr;
+	GLuint vao = 0;
+};
 
-Load< Scene > cave_scene(LoadTagDefault, []() -> Scene const * {
-	return new Scene(data_path("cave-cart.scene"), [&](Scene &scene, Scene::Transform *transform, std::string const &mesh_name){
-		Mesh const &mesh = cave_meshes->lookup(mesh_name);
+static MeshSet cave_set, tunnel_set, cart_set;
 
-		scene.drawables.emplace_back(transform);
-		Scene::Drawable &drawable = scene.drawables.back();
+static std::function< Scene const *() > scene_loader(MeshSet *set, std::string const &pnct, std::string const &scene) {
+	return [set, pnct, scene]() -> Scene const * {
+		set->buffer = new MeshBuffer(data_path(pnct));
+		set->vao = set->buffer->make_vao_for_program(lit_color_texture_program->program);
+		return new Scene(data_path(scene), [set](Scene &s, Scene::Transform *transform, std::string const &mesh_name){
+			Mesh const &mesh = set->buffer->lookup(mesh_name);
 
-		drawable.pipeline = lit_color_texture_program_pipeline;
+			s.drawables.emplace_back(transform);
+			Scene::Drawable &drawable = s.drawables.back();
 
-		drawable.pipeline.vao = cave_meshes_for_lit_color_texture_program;
-		drawable.pipeline.type = mesh.type;
-		drawable.pipeline.start = mesh.start;
-		drawable.pipeline.count = mesh.count;
+			drawable.pipeline = lit_color_texture_program_pipeline;
 
-	});
-});
+			drawable.pipeline.vao = set->vao;
+			drawable.pipeline.type = mesh.type;
+			drawable.pipeline.start = mesh.start;
+			drawable.pipeline.count = mesh.count;
+		});
+	};
+}
 
-//returns a loader that opens one sound file, all are 48kHz mono float WAVs
+Load< Scene > cave_scene   (LoadTagDefault, scene_loader(&cave_set,   "cave-cart.pnct",   "cave-cart.scene"));
+Load< Scene > tunnel_scene (LoadTagDefault, scene_loader(&tunnel_set, "tunnel-cart.pnct", "tunnel-cart.scene"));
+Load< Scene > cart_scene   (LoadTagDefault, scene_loader(&cart_set,   "cart-front.pnct",  "cart-front.scene"));
+
 static std::function< Sound::Sample const *() > sample_loader(std::string const &file) {
 	return [file]() -> Sound::Sample const * { return new Sound::Sample(data_path(file)); };
 }
@@ -50,76 +57,79 @@ Load< Sound::Sample > hit_rocks_sample (LoadTagDefault, sample_loader("sounds/hi
 Load< Sound::Sample > avoid_sample     (LoadTagDefault, sample_loader("sounds/avoid-sound.wav"));
 Load< Sound::Sample > game_end_sample  (LoadTagDefault, sample_loader("sounds/game-end.wav"));
 
+//matches "cart_root" and "cart_root.002" alike:
+static bool name_is(std::string const &name, std::string const &want) {
+	if (name.compare(0, want.size(), want) != 0) return false;
+	if (name.size() == want.size()) return true;
+	//accept exactly ".NNN"
+	return name.size() == want.size() + 4 && name[want.size()] == '.';
+}
 
-PlayMode::PlayMode() : scene(*cave_scene) {
-	//get pointer to the fixed forward camera:
-	if (scene.cameras.size() != 1) throw std::runtime_error("Expecting scene to have exactly one camera, but it has " + std::to_string(scene.cameras.size()));
-	camera = &scene.cameras.front();
 
-	//cart rumble follows the cart; position set every update():
+PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_scene) {
+	//tunnel-cart has no camera of its own and borrows this one:
+	if (junction.cameras.size() != 1) {
+		throw std::runtime_error("Expecting cave-cart to have exactly one camera, but it has " + std::to_string(junction.cameras.size()));
+	}
+	camera = &junction.cameras.front();
+
+	//cave-cart has a cart modelled into it; without this it draws on top of cart-front's:
+	for (auto d = junction.drawables.begin(); d != junction.drawables.end(); /* below */) {
+		if (d->transform->name.compare(0, 5, "Cart_") == 0) d = junction.drawables.erase(d);
+		else ++d;
+	}
+
+	for (auto &transform : cart.transforms) {
+		if (name_is(transform.name, "cart_root")) cart_root = &transform;
+	}
+	if (cart_root == nullptr) throw std::runtime_error("cart-front.scene has no 'cart_root' transform.");
+
+	begin_phase(Phase::Approach);
+
 	cart_loop = Sound::loop_3D(*cart_slow_sample, 0.6f, glm::vec3(0.0f, 0.0f, 0.0f), 8.0f);
 }
 
 PlayMode::~PlayMode() {
 }
 
+void PlayMode::begin_phase(Phase next) {
+	phase = next;
+	if (next == Phase::Approach) {
+		cart_s = CartStartY;
+		target_lane = 1;
+		locked_lane = 1;
+	} else if (next == Phase::Branch) {
+		cart_s = SplitY;
+		locked_lane = target_lane;
+	} else { //Tunnel
+		cart_s = 0.0f;
+	}
+	place_cart_and_camera();
+}
+
+void PlayMode::place_cart_and_camera() {
+	//the panels sit CartRootOffset south of cart_root, so bias the root to land the body at cart_s:
+	cart_root->position = glm::vec3(cart_x, cart_s + CartRootOffset, 0.0f);
+	cart_root->rotation = glm::angleAxis(cart_yaw, glm::vec3(0.0f, 0.0f, 1.0f));
+
+	camera->transform->position = glm::vec3(cart_x, cart_s - CameraBack, 1.65f);
+}
+
 bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size) {
+	(void)window_size;
 
 	if (evt.type == SDL_EVENT_KEY_DOWN) {
+		if (evt.key.repeat) return false;
 		if (evt.key.key == SDLK_ESCAPE) {
-			SDL_SetWindowRelativeMouseMode(Mode::window, false);
+			Mode::set_current(nullptr);
 			return true;
 		} else if (evt.key.key == SDLK_A) {
 			left.downs += 1;
-			left.pressed = true;
+			if (phase == Phase::Approach && target_lane > 0) target_lane -= 1;
 			return true;
 		} else if (evt.key.key == SDLK_D) {
 			right.downs += 1;
-			right.pressed = true;
-			return true;
-		} else if (evt.key.key == SDLK_W) {
-			up.downs += 1;
-			up.pressed = true;
-			return true;
-		} else if (evt.key.key == SDLK_S) {
-			down.downs += 1;
-			down.pressed = true;
-			return true;
-		} else if (evt.key.key == SDLK_SPACE) {
-			if (warning_oneshot) warning_oneshot->stop();
-			//test warning from the left tunnel mouth (Tunnel_Left_ROOT sits at x=-4, y=8):
-			warning_oneshot = Sound::play_3D(*bats_sample, 1.0f, glm::vec3(-4.0f, 8.0f, 1.0f), 6.0f);
-		}
-	} else if (evt.type == SDL_EVENT_KEY_UP) {
-		if (evt.key.key == SDLK_A) {
-			left.pressed = false;
-			return true;
-		} else if (evt.key.key == SDLK_D) {
-			right.pressed = false;
-			return true;
-		} else if (evt.key.key == SDLK_W) {
-			up.pressed = false;
-			return true;
-		} else if (evt.key.key == SDLK_S) {
-			down.pressed = false;
-			return true;
-		}
-	} else if (evt.type == SDL_EVENT_MOUSE_BUTTON_DOWN) {
-		if (SDL_GetWindowRelativeMouseMode(Mode::window) == false) {
-			SDL_SetWindowRelativeMouseMode(Mode::window, true);
-			return true;
-		}
-	} else if (evt.type == SDL_EVENT_MOUSE_MOTION) {
-		if (SDL_GetWindowRelativeMouseMode(Mode::window) == true) {
-			glm::vec2 motion = glm::vec2(
-				evt.motion.xrel / float(window_size.y),
-				-evt.motion.yrel / float(window_size.y)
-			);
-			camera->transform->rotation = glm::normalize(
-				camera->transform->rotation
-				* glm::angleAxis(-motion.x * camera->fovy, glm::vec3(0.0f, 1.0f, 0.0f))
-				* glm::angleAxis(motion.y * camera->fovy, glm::vec3(1.0f, 0.0f, 0.0f))
-			);
+			if (phase == Phase::Approach && target_lane < 2) target_lane += 1;
 			return true;
 		}
 	}
@@ -128,68 +138,73 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 }
 
 void PlayMode::update(float elapsed) {
+	cart_s += Speed * elapsed;
 
-	//keep the cart rumble at the camera's feet for now:
-	cart_loop->set_position(camera->transform->position + glm::vec3(0.0f, 0.0f, -1.0f));
-
-	//move camera:
-	{
-
-		//combine inputs into a move:
-		constexpr float PlayerSpeed = 30.0f;
-		glm::vec2 move = glm::vec2(0.0f);
-		if (left.pressed && !right.pressed) move.x =-1.0f;
-		if (!left.pressed && right.pressed) move.x = 1.0f;
-		if (down.pressed && !up.pressed) move.y =-1.0f;
-		if (!down.pressed && up.pressed) move.y = 1.0f;
-
-		//make it so that moving diagonally doesn't go faster:
-		if (move != glm::vec2(0.0f)) move = glm::normalize(move) * PlayerSpeed * elapsed;
-
-		glm::mat4x3 frame = camera->transform->make_parent_from_local();
-		glm::vec3 frame_right = frame[0];
-		//glm::vec3 up = frame[1];
-		glm::vec3 frame_forward = -frame[2];
-
-		camera->transform->position += move.x * frame_right + move.y * frame_forward;
+	if (phase == Phase::Approach) {
+		if (cart_s >= SplitY) begin_phase(Phase::Branch);
+	} else if (phase == Phase::Branch) {
+		if (cart_s >= BranchEndY) begin_phase(Phase::Tunnel);
+	} else { //Tunnel
+		if (cart_s >= TunnelLength) {
+			junctions_cleared += 1;
+			begin_phase(Phase::Approach);
+		}
 	}
 
-	{ //update listener to camera position:
+	{ //ease toward the lane so a switch reads as following a rail rather than sliding sideways:
+		float want_x = 0.0f;
+		float want_yaw = 0.0f;
+		if (phase == Phase::Approach) {
+			want_x = LaneX[target_lane] * 0.25f;
+			want_yaw = LaneYaw[target_lane] * 0.25f;
+		} else if (phase == Phase::Branch) {
+			float t = (cart_s - SplitY) / (BranchEndY - SplitY);
+			want_x = LaneX[locked_lane] * t;
+			want_yaw = LaneYaw[locked_lane];
+		}
+
+		//covers about 90% of the gap in 0.2 seconds
+		float k = 1.0f - std::exp(-elapsed / 0.09f);
+		cart_x += k * (want_x - cart_x);
+		cart_yaw += k * (want_yaw - cart_yaw);
+	}
+
+	place_cart_and_camera();
+
+	cart_loop->set_position(glm::vec3(cart_x, cart_s, 0.2f));
+
+	{ //listener rides the camera:
 		glm::mat4x3 frame = camera->transform->make_parent_from_local();
 		glm::vec3 frame_right = frame[0];
 		glm::vec3 frame_at = frame[3];
 		Sound::listener.set_position_right(frame_at, frame_right, 1.0f / 60.0f);
 	}
 
-	//reset button press counters:
 	left.downs = 0;
 	right.downs = 0;
-	up.downs = 0;
-	down.downs = 0;
 }
 
 void PlayMode::draw(glm::uvec2 const &drawable_size) {
-	//update camera aspect ratio for drawable:
 	camera->aspect = float(drawable_size.x) / float(drawable_size.y);
 
-	//set up light type and position for lit_color_texture_program:
-	// TODO: consider using the Light(s) in the scene to do this
 	glUseProgram(lit_color_texture_program->program);
 	glUniform1i(lit_color_texture_program->LIGHT_TYPE_int, 1);
 	glUniform3fv(lit_color_texture_program->LIGHT_DIRECTION_vec3, 1, glm::value_ptr(glm::vec3(0.0f, 0.0f,-1.0f)));
 	glUniform3fv(lit_color_texture_program->LIGHT_ENERGY_vec3, 1, glm::value_ptr(glm::vec3(1.0f, 1.0f, 0.95f)));
 	glUseProgram(0);
 
-	glClearColor(0.5f, 0.5f, 0.5f, 1.0f);
-	glClearDepth(1.0f); //1.0 is actually the default value to clear the depth buffer to, but FYI you can change it.
+	glClearColor(0.02f, 0.02f, 0.03f, 1.0f);
+	glClearDepth(1.0f);
 	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	glEnable(GL_DEPTH_TEST);
-	glDepthFunc(GL_LESS); //this is the default depth comparison function, but FYI you can change it.
+	glDepthFunc(GL_LESS);
 
-	scene.draw(*camera);
+	if (phase == Phase::Tunnel) tunnel.draw(*camera);
+	else junction.draw(*camera);
+	cart.draw(*camera);
 
-	{ //use DrawLines to overlay some text:
+	{
 		glDisable(GL_DEPTH_TEST);
 		float aspect = float(drawable_size.x) / float(drawable_size.y);
 		DrawLines lines(glm::mat4(
@@ -199,13 +214,20 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 			0.0f, 0.0f, 0.0f, 1.0f
 		));
 
+		char const *phase_name = (phase == Phase::Approach ? "APPROACH"
+		                        : phase == Phase::Branch   ? "BRANCH" : "TUNNEL");
+		std::string hud = std::string(phase_name)
+			+ "  lane " + std::to_string(target_lane)
+			+ "  y " + std::to_string(int(cart_s))
+			+ "  cleared " + std::to_string(junctions_cleared);
+
 		constexpr float H = 0.09f;
-		lines.draw_text("Mouse motion rotates camera; WASD moves; escape ungrabs mouse",
+		lines.draw_text(hud,
 			glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0x00, 0x00, 0x00, 0x00));
 		float ofs = 2.0f / drawable_size.y;
-		lines.draw_text("Mouse motion rotates camera; WASD moves; escape ungrabs mouse",
+		lines.draw_text(hud,
 			glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
 			glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
 			glm::u8vec4(0xff, 0xff, 0xff, 0x00));
