@@ -29,9 +29,8 @@ struct PlayMode : Mode {
 	static constexpr float LaneYaw[3] = { 0.6196f, 0.0f, -0.6196f }; //atan(4.0/5.6)
 	static constexpr float LookLean = 0.22f; //how far the camera turns toward the chosen mouth
 
-	static constexpr float Speed = 1.0f;       //approach and branch: the player is deciding
-	static constexpr float TunnelSpeed = 3.0f; //tunnel: nothing to decide, so get it over with
-	static_assert(Speed >= mine::MinSpeed && Speed <= mine::MaxSpeed);
+	//nothing to decide in the tunnel, so it never crawls no matter what the level rolls at:
+	static constexpr float TunnelSpeed = 3.0f;
 	static_assert(TunnelSpeed >= mine::MinSpeed && TunnelSpeed <= mine::MaxSpeed);
 
 	enum class Phase {
@@ -46,12 +45,16 @@ struct PlayMode : Mode {
 	int target_lane = 1;
 	int locked_lane = 1;
 
+	mine::MineCartLogic logic;
+	//eased so W/S does not snap the cart between speeds:
+	float speed = mine::MinSpeed;
+	bool slowing = false;
+
 	float cart_x = 0.0f;
 	float cart_yaw = 0.0f;
 	//the camera leans toward the chosen lane before the split, when the cart itself cannot:
 	float cam_yaw = 0.0f;
 
-	int junctions_cleared = 0;
 
 	struct Button {
 		uint8_t downs = 0;
@@ -62,6 +65,11 @@ struct PlayMode : Mode {
 	Scene junction; //cave-cart, with its built-in cart panels dropped
 	Scene tunnel;
 	Scene cart;     //cart-front, panels already parented to cart_root in Blender
+	//shown only once the lane is locked, so the choice cannot be read off the screen:
+	Scene bat;
+	Scene rock;
+	Scene::Transform *bat_root = nullptr;
+	Scene::Transform *rock_root = nullptr;
 
 	Scene::Camera *camera = nullptr;
 	glm::quat camera_base_rotation; //the scene's own "look down +Y", yawed away from each frame
@@ -71,4 +79,5 @@ struct PlayMode : Mode {
 
 	void begin_phase(Phase next);
 	void place_cart_and_camera();
+	void place_danger();
 };

@@ -12,6 +12,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <random>
+#include <algorithm>
 
 struct MeshSet {
 	MeshBuffer const *buffer = nullptr;
@@ -44,6 +45,10 @@ Load< Scene > cave_scene   (LoadTagDefault, scene_loader(&cave_set,   "cave-cart
 Load< Scene > tunnel_scene (LoadTagDefault, scene_loader(&tunnel_set, "tunnel-cart.pnct", "tunnel-cart.scene"));
 Load< Scene > cart_scene   (LoadTagDefault, scene_loader(&cart_set,   "cart-front.pnct",  "cart-front.scene"));
 
+static MeshSet bat_set, rock_set;
+Load< Scene > bat_scene    (LoadTagDefault, scene_loader(&bat_set,    "bat.pnct",         "bat.scene"));
+Load< Scene > rock_scene   (LoadTagDefault, scene_loader(&rock_set,   "rock.pnct",        "rock.scene"));
+
 static std::function< Sound::Sample const *() > sample_loader(std::string const &file) {
 	return [file]() -> Sound::Sample const * { return new Sound::Sample(data_path(file)); };
 }
@@ -66,7 +71,8 @@ static bool name_is(std::string const &name, std::string const &want) {
 }
 
 
-PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_scene) {
+PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_scene),
+                       bat(*bat_scene), rock(*rock_scene) {
 	//tunnel-cart has no camera of its own and borrows this one:
 	if (junction.cameras.size() != 1) {
 		throw std::runtime_error("Expecting cave-cart to have exactly one camera, but it has " + std::to_string(junction.cameras.size()));
@@ -84,6 +90,13 @@ PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_
 		if (name_is(transform.name, "cart_root")) cart_root = &transform;
 	}
 	if (cart_root == nullptr) throw std::runtime_error("cart-front.scene has no 'cart_root' transform.");
+
+	//bat.scene and rock.scene are flat, so the first transform is the whole prop:
+	if (bat.transforms.empty() || rock.transforms.empty()) throw std::runtime_error("bat/rock scene is empty.");
+	bat_root = &bat.transforms.front();
+	rock_root = &rock.transforms.front();
+
+	speed = logic.default_speed();
 
 	begin_phase(Phase::Approach);
 
@@ -106,6 +119,7 @@ void PlayMode::begin_phase(Phase next) {
 		cart_s = 0.0f;
 	}
 	place_cart_and_camera();
+	place_danger();
 }
 
 void PlayMode::place_cart_and_camera() {
@@ -117,6 +131,25 @@ void PlayMode::place_cart_and_camera() {
 	glm::vec3 forward = glm::vec3(-std::sin(cam_yaw), std::cos(cam_yaw), 0.0f);
 	camera->transform->position = glm::vec3(cart_x, cart_s, 1.65f) - CameraBack * forward;
 	camera->transform->rotation = glm::angleAxis(cam_yaw, glm::vec3(0.0f, 0.0f, 1.0f)) * camera_base_rotation;
+}
+
+void PlayMode::place_danger() {
+	//park whatever is not in play far below the floor rather than juggling drawable lists:
+	glm::vec3 const offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
+	bat_root->position = offscreen;
+	rock_root->position = offscreen;
+
+	if (phase == Phase::Approach || !logic.pending.active) return;
+
+	glm::vec3 at;
+	if (phase == Phase::Branch) {
+		at = glm::vec3(LaneX[locked_lane], BranchEndY + 2.0f, 0.9f);
+	} else {
+		at = glm::vec3(0.0f, TunnelLength * 0.6f, 0.9f);
+	}
+
+	if (logic.pending.danger == mine::Danger::Bat) bat_root->position = at;
+	else if (logic.pending.danger == mine::Danger::Rock) rock_root->position = glm::vec3(at.x, at.y, 0.0f);
 }
 
 bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size) {
@@ -135,6 +168,17 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			right.downs += 1;
 			if (phase == Phase::Approach && target_lane < 2) target_lane += 1;
 			return true;
+		} else if (evt.key.key == SDLK_S) {
+			slowing = true;
+			return true;
+		} else if (evt.key.key == SDLK_W) {
+			slowing = false;
+			return true;
+		}
+	} else if (evt.type == SDL_EVENT_KEY_UP) {
+		if (evt.key.key == SDLK_S) {
+			slowing = false;
+			return true;
 		}
 	}
 
@@ -142,15 +186,24 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 }
 
 void PlayMode::update(float elapsed) {
-	cart_s += (phase == Phase::Tunnel ? TunnelSpeed : Speed) * elapsed;
+	{ //S eases down toward the floor speed, W back up to whatever the level rolls at:
+		float want = slowing ? logic.min_speed() : logic.default_speed();
+		speed += (1.0f - std::exp(-elapsed / 0.25f)) * (want - speed);
+	}
+	cart_s += (phase == Phase::Tunnel ? std::max(TunnelSpeed, speed) : speed) * elapsed;
 
 	if (phase == Phase::Approach) {
-		if (cart_s >= SplitY) begin_phase(Phase::Branch);
+		if (cart_s >= SplitY) {
+			//the lane is decided here and nowhere else; the tunnel only plays it back
+			locked_lane = target_lane;
+			logic.commit(locked_lane);
+			begin_phase(Phase::Branch);
+		}
 	} else if (phase == Phase::Branch) {
 		if (cart_s >= BranchEndY) begin_phase(Phase::Tunnel);
 	} else { //Tunnel
 		if (cart_s >= TunnelLength) {
-			junctions_cleared += 1;
+			logic.settle();
 			begin_phase(Phase::Approach);
 		}
 	}
@@ -177,6 +230,7 @@ void PlayMode::update(float elapsed) {
 	}
 
 	place_cart_and_camera();
+	place_danger();
 
 	cart_loop->set_position(glm::vec3(cart_x, cart_s, 0.2f));
 
@@ -215,6 +269,8 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	if (phase == Phase::Tunnel) tunnel.draw(*camera);
 	else junction.draw(*camera);
 	cart.draw(*camera);
+	bat.draw(*camera);
+	rock.draw(*camera);
 
 	// {
 	// 	glDisable(GL_DEPTH_TEST);
