@@ -72,7 +72,7 @@ static bool name_is(std::string const &name, std::string const &want) {
 
 
 PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_scene),
-                       bat(*bat_scene), rock(*rock_scene) {
+                       rock(*rock_scene), visual_rng(std::random_device{}()) {
 	//tunnel-cart has no camera of its own and borrows this one:
 	if (junction.cameras.size() != 1) {
 		throw std::runtime_error("Expecting cave-cart to have exactly one camera, but it has " + std::to_string(junction.cameras.size()));
@@ -91,16 +91,25 @@ PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_
 	}
 	if (cart_root == nullptr) throw std::runtime_error("cart-front.scene has no 'cart_root' transform.");
 
-	//bat.scene and rock.scene are flat, so the first transform is the whole prop:
-	if (bat.transforms.empty() || rock.transforms.empty()) throw std::runtime_error("bat/rock scene is empty.");
-	bat_root = &bat.transforms.front();
-	rock_root = &rock.transforms.front();
+	for (int i = 0; i < BatCount; ++i) {
+		bats[size_t(i)] = *bat_scene;
+		for (auto &t : bats[size_t(i)].transforms) {
+			if (name_is(t.name, "bat_root")) bat_root[size_t(i)] = &t;
+			else if (name_is(t.name, "bat_wing_left")) bat_wing_l[size_t(i)] = &t;
+			else if (name_is(t.name, "bat_wing_right")) bat_wing_r[size_t(i)] = &t;
+		}
+		if (!bat_root[size_t(i)]) throw std::runtime_error("bat.scene has no 'bat_root' transform.");
+	}
+	for (auto &t : rock.transforms) {
+		if (name_is(t.name, "rock_root")) rock_root = &t;
+	}
+	if (rock_root == nullptr) throw std::runtime_error("rock.scene has no 'rock_root' transform.");
 
 	speed = logic.default_speed();
 
 	begin_phase(Phase::Approach);
 
-	cart_loop = Sound::loop_3D(*cart_slow_sample, 0.6f, glm::vec3(0.0f, 0.0f, 0.0f), 8.0f);
+	cart_loop = Sound::loop_3D(*cart_slow_sample, 0.18f, glm::vec3(0.0f, 0.0f, 0.0f), 8.0f);
 }
 
 PlayMode::~PlayMode() {
@@ -119,7 +128,7 @@ void PlayMode::begin_phase(Phase next) {
 		cart_s = 0.0f;
 	}
 	place_cart_and_camera();
-	place_danger();
+	spawn_danger();
 }
 
 void PlayMode::place_cart_and_camera() {
@@ -133,23 +142,73 @@ void PlayMode::place_cart_and_camera() {
 	camera->transform->rotation = glm::angleAxis(cam_yaw, glm::vec3(0.0f, 0.0f, 1.0f)) * camera_base_rotation;
 }
 
-void PlayMode::place_danger() {
-	//park whatever is not in play far below the floor rather than juggling drawable lists:
-	glm::vec3 const offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
-	bat_root->position = offscreen;
-	rock_root->position = offscreen;
+//anything not in play is parked below the floor rather than juggling drawable lists:
+static constexpr glm::vec3 Offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
 
-	if (phase == Phase::Approach || !logic.pending.active) return;
+void PlayMode::spawn_danger() {
+	tunnel_t = 0.0f;
+	for (int i = 0; i < BatCount; ++i) bat_root[size_t(i)]->position = Offscreen;
+	rock_root->position = Offscreen;
 
-	glm::vec3 at;
-	if (phase == Phase::Branch) {
-		at = glm::vec3(LaneX[locked_lane], BranchEndY + 2.0f, 0.9f);
-	} else {
-		at = glm::vec3(0.0f, TunnelLength * 0.6f, 0.9f);
+	if (phase != Phase::Tunnel || !logic.pending.active) return;
+
+	//tunnel_wall's bore is x -1.74..1.81 and z up to 3.45, so keep well inside it:
+	std::uniform_real_distribution< float > across(-1.1f, 1.1f);
+	std::uniform_real_distribution< float > height(0.7f, 2.6f);
+	std::uniform_real_distribution< float > size(0.18f, 0.34f);
+	std::uniform_real_distribution< float > turn(0.0f, 6.283f);
+
+	if (logic.pending.danger == mine::Danger::Bat) {
+		for (int i = 0; i < BatCount; ++i) {
+			BatState &b = bat_state[size_t(i)];
+			b.x = across(visual_rng);
+			b.z = height(visual_rng);
+			b.scale = size(visual_rng);
+			b.delay = float(i) * 0.22f;
+			b.flap_phase = turn(visual_rng);
+		}
+	} else if (logic.pending.danger == mine::Danger::Rock) {
+		rock_x = across(visual_rng) * 0.5f;
 	}
+}
 
-	if (logic.pending.danger == mine::Danger::Bat) bat_root->position = at;
-	else if (logic.pending.danger == mine::Danger::Rock) rock_root->position = glm::vec3(at.x, at.y, 0.0f);
+void PlayMode::animate_danger(float elapsed) {
+	if (phase != Phase::Tunnel) return;
+	tunnel_t += elapsed;
+
+	if (logic.pending.danger == mine::Danger::Bat) {
+		for (int i = 0; i < BatCount; ++i) {
+			BatState const &b = bat_state[size_t(i)];
+			float t = tunnel_t - b.delay;
+			//start at the far end and close on the cart faster than the cart is travelling:
+			float y = TunnelLength - t * BatSpeed;
+			if (t < 0.0f || y < cart_s - 3.0f) {
+				bat_root[size_t(i)]->position = Offscreen;
+				continue;
+			}
+			bat_root[size_t(i)]->position = glm::vec3(
+				b.x + 0.35f * std::sin(t * 2.7f + b.flap_phase), y,
+				b.z + 0.20f * std::sin(t * 1.9f + b.flap_phase));
+			bat_root[size_t(i)]->scale = glm::vec3(b.scale);
+
+			float flap = 0.9f * std::sin(tunnel_t * 18.0f + b.flap_phase);
+			glm::vec3 const fwd = glm::vec3(0.0f, 1.0f, 0.0f);
+			if (bat_wing_l[size_t(i)]) bat_wing_l[size_t(i)]->rotation = glm::angleAxis(-flap, fwd);
+			if (bat_wing_r[size_t(i)]) bat_wing_r[size_t(i)]->rotation = glm::angleAxis(flap, fwd);
+		}
+	} else if (logic.pending.danger == mine::Danger::Rock) {
+		//let go once the cart is close enough that the fall reads as a near miss:
+		float release = (RockDropY - 3.0f) / std::max(TunnelSpeed, speed);
+		float t = tunnel_t - release;
+		if (t < 0.0f) {
+			rock_root->position = Offscreen;
+			return;
+		}
+		float z = RockDropZ - 0.5f * 9.8f * t * t;
+		rock_root->position = glm::vec3(rock_x, RockDropY, std::max(0.0f, z));
+		rock_root->scale = glm::vec3(0.45f);
+		rock_root->rotation = glm::angleAxis(t * 3.0f, glm::normalize(glm::vec3(0.4f, 1.0f, 0.2f)));
+	}
 }
 
 bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size) {
@@ -230,7 +289,7 @@ void PlayMode::update(float elapsed) {
 	}
 
 	place_cart_and_camera();
-	place_danger();
+	animate_danger(elapsed);
 
 	cart_loop->set_position(glm::vec3(cart_x, cart_s, 0.2f));
 
@@ -269,8 +328,10 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 	if (phase == Phase::Tunnel) tunnel.draw(*camera);
 	else junction.draw(*camera);
 	cart.draw(*camera);
-	bat.draw(*camera);
-	rock.draw(*camera);
+	if (phase == Phase::Tunnel) {
+		for (auto &b : bats) b.draw(*camera);
+		rock.draw(*camera);
+	}
 
 	// {
 	// 	glDisable(GL_DEPTH_TEST);

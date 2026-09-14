@@ -6,8 +6,9 @@
 
 #include <glm/glm.hpp>
 
+#include <array>
+#include <random>
 #include <vector>
-#include <deque>
 
 struct PlayMode : Mode {
 	PlayMode();
@@ -65,11 +66,29 @@ struct PlayMode : Mode {
 	Scene junction; //cave-cart, with its built-in cart panels dropped
 	Scene tunnel;
 	Scene cart;     //cart-front, panels already parented to cart_root in Blender
-	//shown only once the lane is locked, so the choice cannot be read off the screen:
-	Scene bat;
+	//dangers live in the tunnel only, so nothing about the choice can be read off the screen:
+	static constexpr int BatCount = 5;
+	static constexpr float BatSpeed = 6.0f;   //toward the cart, on top of the cart's own speed
+	static constexpr float RockDropY = 6.0f;  //a little ahead of where the cart will be
+	static constexpr float RockDropZ = 3.2f;
+
+	std::array< Scene, BatCount > bats;
+	std::array< Scene::Transform *, BatCount > bat_root = {};
+	std::array< Scene::Transform *, BatCount > bat_wing_l = {};
+	std::array< Scene::Transform *, BatCount > bat_wing_r = {};
+	struct BatState {
+		float x = 0.0f, z = 1.5f, scale = 0.3f, delay = 0.0f, flap_phase = 0.0f;
+	};
+	std::array< BatState, BatCount > bat_state;
+
 	Scene rock;
-	Scene::Transform *bat_root = nullptr;
 	Scene::Transform *rock_root = nullptr;
+	float rock_x = 0.0f;
+
+	//seconds since this tunnel run began; drives every danger animation:
+	float tunnel_t = 0.0f;
+	//kept apart from the game rng so replays of a seed stay identical:
+	std::mt19937 visual_rng;
 
 	Scene::Camera *camera = nullptr;
 	glm::quat camera_base_rotation; //the scene's own "look down +Y", yawed away from each frame
@@ -79,5 +98,6 @@ struct PlayMode : Mode {
 
 	void begin_phase(Phase next);
 	void place_cart_and_camera();
-	void place_danger();
+	void spawn_danger();
+	void animate_danger(float elapsed);
 };
