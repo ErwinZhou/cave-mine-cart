@@ -94,10 +94,38 @@ struct PlayMode : Mode {
 	glm::quat camera_base_rotation; //the scene's own "look down +Y", yawed away from each frame
 	Scene::Transform *cart_root = nullptr;
 
-	std::shared_ptr< Sound::PlayingSample > cart_loop;
+	//how the three lanes reach the ears: hard left, centred, hard right
+	static constexpr float LanePan[3] = { -1.0f, 0.0f, 1.0f };
+	//the raw warning samples run 5.6 s, far longer than one approach, so each is cut short:
+	static constexpr float WarnLength = 0.8f;
+	static constexpr float WarnGap = 0.95f;
+	static constexpr float RumbleVolume = 0.02f;
+
+	std::shared_ptr< Sound::PlayingSample > cart_slow_loop;
+	std::shared_ptr< Sound::PlayingSample > cart_fast_loop;
+
+	struct Warning {
+		float at = 0.0f;
+		int lane = 1;
+		mine::Danger danger = mine::Danger::None;
+	};
+	std::vector< Warning > warn_queue;
+	size_t warn_next = 0;
+	float warn_t = 0.0f;
+	struct Playing {
+		std::shared_ptr< Sound::PlayingSample > handle;
+		float stop_at = 0.0f;
+	};
+	std::vector< Playing > warn_playing;
+
+	//the tunnel settles the previous junction part way through, then warns about the next one:
+	bool settled_this_tunnel = false;
 
 	void begin_phase(Phase next);
 	void place_cart_and_camera();
+	void arm_warnings(float start_delay, float budget);
+	void update_warnings(float elapsed);
+	void update_rumble(float elapsed);
 	void spawn_danger();
 	void animate_danger(float elapsed);
 };

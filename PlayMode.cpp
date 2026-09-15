@@ -106,10 +106,13 @@ PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_
 	if (rock_root == nullptr) throw std::runtime_error("rock.scene has no 'rock_root' transform.");
 
 	speed = logic.default_speed();
+	arm_warnings(0.6f, (SplitY - CartStartY) / std::max(speed, mine::MinSpeed) - 0.2f);
 
 	begin_phase(Phase::Approach);
 
-	cart_loop = Sound::loop_3D(*cart_slow_sample, 0.18f, glm::vec3(0.0f, 0.0f, 0.0f), 8.0f);
+	//both rumbles run the whole time and are crossfaded by speed:
+	cart_slow_loop = Sound::loop(*cart_slow_sample, RumbleVolume);
+	cart_fast_loop = Sound::loop(*cart_fast_sample, 0.0f);
 }
 
 PlayMode::~PlayMode() {
@@ -126,6 +129,7 @@ void PlayMode::begin_phase(Phase next) {
 		locked_lane = target_lane;
 	} else { //Tunnel
 		cart_s = 0.0f;
+		settled_this_tunnel = false;
 	}
 	place_cart_and_camera();
 	spawn_danger();
@@ -144,6 +148,64 @@ void PlayMode::place_cart_and_camera() {
 
 //anything not in play is parked below the floor rather than juggling drawable lists:
 static constexpr glm::vec3 Offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
+
+void PlayMode::arm_warnings(float start_delay, float budget) {
+	warn_queue.clear();
+	warn_next = 0;
+	warn_t = 0.0f;
+
+	int dangers = logic.current.danger_count();
+	if (dangers == 0) return;
+
+	//drop the repeat pass, then tighten the spacing, rather than let a warning arrive after the
+	//split, where it can no longer change anything
+	int passes = logic.warning_passes();
+	float room = budget - start_delay - WarnLength;
+	float gap = WarnGap;
+	while (passes > 1 && float(passes * dangers - 1) * WarnLength > room) passes -= 1;
+	int slots = passes * dangers;
+	if (slots > 1) gap = glm::clamp(room / float(slots - 1), WarnLength, WarnGap);
+
+	float at = start_delay;
+	for (int pass = 0; pass < passes; ++pass) {
+		for (int lane = 0; lane < mine::LaneCount; ++lane) {
+			if (logic.current.safe(lane)) continue;
+			warn_queue.push_back(Warning{ at, lane, logic.current.lane[lane] });
+			at += gap;
+		}
+	}
+}
+
+void PlayMode::update_warnings(float elapsed) {
+	warn_t += elapsed;
+
+	while (warn_next < warn_queue.size() && warn_queue[warn_next].at <= warn_t) {
+		Warning const &w = warn_queue[warn_next];
+		//2D panning, not play_3D: pan -1 leaves the right channel at exactly zero, which is the
+		//whole point; distance attenuation would bleed the warning into both ears
+		auto handle = Sound::play(
+			*(w.danger == mine::Danger::Bat ? bats_sample : rocks_sample),
+			1.0f, LanePan[w.lane]);
+		warn_playing.push_back(Playing{ handle, warn_t + WarnLength });
+		warn_next += 1;
+	}
+
+	for (auto p = warn_playing.begin(); p != warn_playing.end(); /* below */) {
+		if (warn_t >= p->stop_at) {
+			if (p->handle) p->handle->stop(0.05f);
+			p = warn_playing.erase(p);
+		} else {
+			++p;
+		}
+	}
+}
+
+void PlayMode::update_rumble(float) {
+	float f = (speed - mine::MinSpeed) / (mine::MaxSpeed - mine::MinSpeed);
+	f = glm::clamp(f, 0.0f, 1.0f);
+	cart_slow_loop->set_volume(RumbleVolume * (1.0f - f));
+	cart_fast_loop->set_volume(RumbleVolume * f);
+}
 
 void PlayMode::spawn_danger() {
 	tunnel_t = 0.0f;
@@ -261,10 +323,33 @@ void PlayMode::update(float elapsed) {
 	} else if (phase == Phase::Branch) {
 		if (cart_s >= BranchEndY) begin_phase(Phase::Tunnel);
 	} else { //Tunnel
-		if (cart_s >= TunnelLength) {
+		//the danger meets the cart part way through; settle there so the HP drop lines up with
+		//the animation, and so the next junction exists in time to be warned about
+		float impact = TunnelLength * 0.5f;
+		if (logic.pending.danger == mine::Danger::Rock) impact = RockDropY;
+		else if (logic.pending.danger == mine::Danger::Bat) impact = TunnelLength * 0.34f;
+
+		if (!settled_this_tunnel && cart_s >= impact) {
+			settled_this_tunnel = true;
+			//everything heard inside the tunnel is centred: the lane is already decided, so there
+			//is nothing left for panning to tell the player
+			if (logic.pending.danger == mine::Danger::Bat) {
+				Sound::play(*bats_sample, 0.9f);
+				Sound::play(*hit_bats_sample, 1.0f);
+			} else if (logic.pending.danger == mine::Danger::Rock) {
+				Sound::play(*rocks_sample, 0.9f);
+				Sound::play(*hit_rocks_sample, 1.0f);
+			} else {
+				Sound::play(*avoid_sample, 0.9f);
+			}
 			logic.settle();
-			begin_phase(Phase::Approach);
+			//hold the warnings back until the cart is nearly out of the tunnel, so they land in
+			//the approach where the choice is actually made rather than ending before it starts
+			float remaining = (TunnelLength - cart_s) / std::max(TunnelSpeed, speed);
+			float approach = (SplitY - CartStartY) / std::max(speed, mine::MinSpeed);
+			arm_warnings(std::max(0.0f, remaining - 0.5f), remaining + approach - 0.2f);
 		}
+		if (cart_s >= TunnelLength) begin_phase(Phase::Approach);
 	}
 
 	{ //ease toward the lane so a switch reads as following a rail rather than sliding sideways:
@@ -290,8 +375,8 @@ void PlayMode::update(float elapsed) {
 
 	place_cart_and_camera();
 	animate_danger(elapsed);
-
-	cart_loop->set_position(glm::vec3(cart_x, cart_s, 0.2f));
+	update_warnings(elapsed);
+	update_rumble(elapsed);
 
 	{ //listener rides the camera:
 		glm::mat4x3 frame = camera->transform->make_parent_from_local();
