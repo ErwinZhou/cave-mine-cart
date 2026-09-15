@@ -51,6 +51,7 @@ struct PlayMode : Mode {
 	//eased so W/S does not snap the cart between speeds:
 	float speed = mine::MinSpeed;
 	bool slowing = false;
+	bool hurrying = false;
 
 	float cart_x = 0.0f;
 	float cart_yaw = 0.0f;

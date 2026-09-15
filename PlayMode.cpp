@@ -215,7 +215,7 @@ void PlayMode::restart() {
 
 	logic.reset_run(std::random_device{}());
 	speed = logic.default_speed();
-	slowing = false;
+	slowing = hurrying = false;
 	cart_x = cart_yaw = cam_yaw = 0.0f;
 	target_lane = locked_lane = 1;
 
@@ -375,12 +375,15 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 			slowing = true;
 			return true;
 		} else if (evt.key.key == SDLK_W) {
-			slowing = false;
+			hurrying = true;
 			return true;
 		}
 	} else if (evt.type == SDL_EVENT_KEY_UP) {
 		if (evt.key.key == SDLK_S) {
 			slowing = false;
+			return true;
+		} else if (evt.key.key == SDLK_W) {
+			hurrying = false;
 			return true;
 		}
 	}
@@ -390,8 +393,10 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 
 void PlayMode::update(float elapsed) {
 	if (phase == Phase::GameOver) return;
-	{ //S eases down toward the floor speed, W back up to whatever the level rolls at:
-		float want = slowing ? logic.min_speed() : logic.default_speed();
+	{ //held S crawls, held W pushes to the top, neither returns to the level's own pace:
+		float want = logic.default_speed();
+		if (slowing && !hurrying) want = logic.min_speed();
+		else if (hurrying && !slowing) want = logic.max_speed();
 		speed += (1.0f - std::exp(-elapsed / 0.25f)) * (want - speed);
 	}
 	cart_s += (phase == Phase::Tunnel ? std::max(TunnelSpeed, speed) : speed) * elapsed;

@@ -52,9 +52,10 @@ struct MineCartLogic {
 
 	Level level() const { return level_for(junctions_cleared); }
 
-	//speed the level rolls at, and the slowest the player may ease down to:
+	//three speeds: what the level rolls at, and what W and S reach for
 	float default_speed() const;
 	float min_speed() const { return MinSpeed; }
+	float max_speed() const { return MaxSpeed; }
 
 	//Hell gives one pass of the warnings instead of two:
 	int warning_passes() const { return level() == Level::Hell ? 1 : 2; }
