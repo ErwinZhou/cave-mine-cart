@@ -127,6 +127,18 @@ if (maek.OS === 'windows') {
 	copies.push( maek.COPY(`${NEST_LIBS}/SDL3/dist/SDL3.dll`, `scenes/SDL3.dll`) );
 }
 
+for (const name of ['cave-cart.pnct', 'cave-cart.scene', 'tunnel-cart.pnct', 'tunnel-cart.scene', 'bat.pnct', 'bat.scene', 'rock.pnct', 'rock.scene', 'cart-front.pnct', 'cart-front.scene']) {
+	copies.push(maek.COPY(`assets/${name}`, `dist/${name}`));
+}
+for (const name of ['bats', 'rocks-loose', 'cart-moving-slowly', 'cart-moving-quickly']) {
+	copies.push(maek.COPY(`sounds/env/${name}.wav`, `dist/sounds/${name}.wav`));
+}
+for (const name of ['hit-by-bats', 'hit-by-rocks', 'avoid-sound', 'game-end']) {
+	copies.push(maek.COPY(`sounds/player/${name}.wav`, `dist/sounds/${name}.wav`));
+}
+
+// 
+
 //call rules on the maek object to specify tasks.
 // rules generally look like:
 //  output = maek.RULE_NAME(input [, output] [, {options}])
@@ -135,7 +147,10 @@ if (maek.OS === 'windows') {
 // cppFile: name of c++ file to compile
 // objFileBase (optional): base name object file to produce (if not supplied, set to options.objDir + '/' + cppFile without the extension)
 //returns objFile: objFileBase + a platform-dependant suffix ('.o' or '.obj')
+const mine_logic_obj = maek.CPP('MineCartLogic.cpp');
+
 const game_names = [
+	mine_logic_obj,
 	maek.CPP('PlayMode.cpp'),
 	maek.CPP('main.cpp'),
 	maek.CPP('LitColorTextureProgram.cpp'),
@@ -159,6 +174,17 @@ const common_names = [
 	maek.CPP('GL.cpp'),
 	maek.CPP('Load.cpp')
 ];
+
+//standalone rules tests: no graphics libraries and no asset files required.
+const mine_logic_test = maek.LINK([
+	mine_logic_obj, maek.CPP('tests/MineCartLogicTest.cpp')
+], 'objs/mine-logic-test', { LINKLibs: [] });
+const test_logic = async () => {
+	await maek.run([`./${mine_logic_test}`], 'TEST mine cart logic');
+};
+test_logic.depends = [mine_logic_test];
+test_logic.label = 'TEST mine cart logic';
+maek.tasks[':test-logic'] = test_logic;
 
 const show_meshes_names = [
 	maek.CPP('show-meshes.cpp'),
