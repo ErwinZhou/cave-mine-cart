@@ -118,6 +118,8 @@ struct PlayMode : Mode {
 		float stop_at = 0.0f;
 	};
 	std::vector< Playing > warn_playing;
+	//impact and avoid cues, cut the moment the tunnel animation they belong to is over:
+	std::vector< std::shared_ptr< Sound::PlayingSample > > tunnel_sounds;
 
 	//the tunnel settles the previous junction part way through, then warns about the next one:
 	bool settled_this_tunnel = false;

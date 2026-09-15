@@ -150,6 +150,11 @@ PlayMode::~PlayMode() {
 }
 
 void PlayMode::begin_phase(Phase next) {
+	//these belong to one tunnel run and must not outlive it, whatever the level's speed
+	if (phase == Phase::Tunnel && next != Phase::Tunnel) {
+		for (auto &h : tunnel_sounds) if (h) h->stop(0.04f);
+		tunnel_sounds.clear();
+	}
 	phase = next;
 	if (next == Phase::Approach) {
 		cart_s = CartStartY;
@@ -206,6 +211,7 @@ static constexpr glm::vec3 Offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
 void PlayMode::restart() {
 	Sound::stop_all_samples();
 	warn_playing.clear();
+	tunnel_sounds.clear();
 
 	logic.reset_run(std::random_device{}());
 	speed = logic.default_speed();
@@ -411,18 +417,19 @@ void PlayMode::update(float elapsed) {
 			//everything heard inside the tunnel is centred: the lane is already decided, so there
 			//is nothing left for panning to tell the player
 			if (logic.pending.danger == mine::Danger::Bat) {
-				Sound::play(*bats_sample, 0.9f);
-				Sound::play(*hit_bats_sample, 1.0f);
+				tunnel_sounds.push_back(Sound::play(*bats_sample, 0.9f));
+				tunnel_sounds.push_back(Sound::play(*hit_bats_sample, 1.0f));
 			} else if (logic.pending.danger == mine::Danger::Rock) {
-				Sound::play(*rocks_sample, 0.9f);
-				Sound::play(*hit_rocks_sample, 1.0f);
+				tunnel_sounds.push_back(Sound::play(*rocks_sample, 0.9f));
+				tunnel_sounds.push_back(Sound::play(*hit_rocks_sample, 1.0f));
 			} else {
-				Sound::play(*avoid_sample, 0.9f);
+				tunnel_sounds.push_back(Sound::play(*avoid_sample, 0.9f));
 			}
 			logic.settle();
 			if (logic.dead()) {
 				Sound::stop_all_samples();
 				warn_playing.clear();
+				tunnel_sounds.clear();
 				Sound::play(*game_end_sample, 1.0f);
 				phase = Phase::GameOver;
 				return;
