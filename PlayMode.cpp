@@ -187,10 +187,13 @@ static void draw_heart(DrawLines &lines, glm::vec2 c, float r, float fill, glm::
 		lines.draw(at(float(i) / steps * 6.2832f), at(float(i + 1) / steps * 6.2832f), col);
 	}
 	if (fill <= 0.0f) return;
-	for (int i = 1; i < 7; ++i) {
-		float y = c.y + r * (0.9f - 0.28f * float(i));
-		float d = (y - c.y) / (r * 1.1f);
-		float half = r * 0.95f * std::sqrt(std::max(0.0f, 1.0f - d * d));
+	//close enough chords that a full heart reads as solid at HUD size
+	int const rows = 16;
+	for (int i = 1; i < rows; ++i) {
+		float y = c.y + r * (1.0f - 2.0f * float(i) / float(rows));
+		float d = (y - c.y) / (r * 1.05f);
+		float half = r * 1.0f * std::sqrt(std::max(0.0f, 1.0f - d * d));
+		if (y > c.y) half *= 0.98f; //the lobes are wider than the point
 		lines.draw(glm::vec3(c.x - half, y, 0.0f),
 		           glm::vec3(c.x - half + 2.0f * half * fill, y, 0.0f), col);
 	}
