@@ -12,6 +12,7 @@
 #include <glm/gtc/quaternion.hpp>
 
 #include <random>
+#include <cmath>
 #include <algorithm>
 
 struct MeshSet {
@@ -49,8 +50,38 @@ static MeshSet bat_set, rock_set;
 Load< Scene > bat_scene    (LoadTagDefault, scene_loader(&bat_set,    "bat.pnct",         "bat.scene"));
 Load< Scene > rock_scene   (LoadTagDefault, scene_loader(&rock_set,   "rock.pnct",        "rock.scene"));
 
+//the recordings carry up to a second of silence before anything happens, which is longer than a
+//warning is allowed to play; drop the quiet head and tail so every sample starts on its onset
 static std::function< Sound::Sample const *() > sample_loader(std::string const &file) {
-	return [file]() -> Sound::Sample const * { return new Sound::Sample(data_path(file)); };
+	return [file]() -> Sound::Sample const * {
+		Sound::Sample raw(data_path(file));
+		std::vector< float > const &d = raw.data;
+		if (d.empty()) return new Sound::Sample(d);
+
+		float peak = 0.0f;
+		for (float x : d) peak = std::max(peak, std::abs(x));
+		float const gate = std::max(1e-4f, 0.02f * peak);
+
+		size_t first = 0;
+		while (first < d.size() && std::abs(d[first]) < gate) first += 1;
+		size_t last = d.size();
+		while (last > first && std::abs(d[last - 1]) < gate) last -= 1;
+		if (first >= last) return new Sound::Sample(d);
+
+		//a little room before the onset, and short ramps so the cut edges do not click
+		size_t const lead = 48000 / 50;
+		size_t const ramp = 48000 / 200;
+		first = (first > lead ? first - lead : 0);
+		last = std::min(d.size(), last + lead);
+
+		std::vector< float > out(d.begin() + std::ptrdiff_t(first), d.begin() + std::ptrdiff_t(last));
+		for (size_t i = 0; i < ramp && i < out.size(); ++i) {
+			float g = float(i) / float(ramp);
+			out[i] *= g;
+			out[out.size() - 1 - i] *= g;
+		}
+		return new Sound::Sample(out);
+	};
 }
 
 Load< Sound::Sample > cart_slow_sample (LoadTagDefault, sample_loader("sounds/cart-moving-slowly.wav"));
@@ -146,8 +177,48 @@ void PlayMode::place_cart_and_camera() {
 	camera->transform->rotation = glm::angleAxis(cam_yaw, glm::vec3(0.0f, 0.0f, 1.0f)) * camera_base_rotation;
 }
 
+//one heart per 2 HP: outline always, chords across the inside for the part that is still full
+static void draw_heart(DrawLines &lines, glm::vec2 c, float r, float fill, glm::u8vec4 col) {
+	auto at = [&](float t) {
+		float st = std::sin(t), ct = std::cos(t);
+		return glm::vec3(c.x + r * (st * st * st),
+		                 c.y + r * (0.8125f * ct - 0.3125f * std::cos(2.0f * t)
+		                          - 0.125f * std::cos(3.0f * t) - 0.0625f * std::cos(4.0f * t)),
+		                 0.0f);
+	};
+	int const steps = 24;
+	for (int i = 0; i < steps; ++i) {
+		lines.draw(at(float(i) / steps * 6.2832f), at(float(i + 1) / steps * 6.2832f), col);
+	}
+	if (fill <= 0.0f) return;
+	for (int i = 1; i < 7; ++i) {
+		float y = c.y + r * (0.9f - 0.28f * float(i));
+		float d = (y - c.y) / (r * 1.1f);
+		float half = r * 0.95f * std::sqrt(std::max(0.0f, 1.0f - d * d));
+		lines.draw(glm::vec3(c.x - half, y, 0.0f),
+		           glm::vec3(c.x - half + 2.0f * half * fill, y, 0.0f), col);
+	}
+}
+
 //anything not in play is parked below the floor rather than juggling drawable lists:
 static constexpr glm::vec3 Offscreen = glm::vec3(0.0f, 0.0f, -100.0f);
+
+void PlayMode::restart() {
+	Sound::stop_all_samples();
+	warn_playing.clear();
+
+	logic.reset_run(std::random_device{}());
+	speed = logic.default_speed();
+	slowing = false;
+	cart_x = cart_yaw = cam_yaw = 0.0f;
+	target_lane = locked_lane = 1;
+
+	cart_slow_loop = Sound::loop(*cart_slow_sample, RumbleVolume);
+	cart_fast_loop = Sound::loop(*cart_fast_sample, 0.0f);
+
+	begin_phase(Phase::Approach);
+	arm_warnings(0.6f, (SplitY - CartStartY) / std::max(speed, mine::MinSpeed) - 0.2f);
+}
 
 void PlayMode::arm_warnings(float start_delay, float budget) {
 	warn_queue.clear();
@@ -281,6 +352,11 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 		if (evt.key.key == SDLK_ESCAPE) {
 			Mode::set_current(nullptr);
 			return true;
+		} else if (evt.key.key == SDLK_R) {
+			restart();
+			return true;
+		} else if (phase == Phase::GameOver) {
+			return false;
 		} else if (evt.key.key == SDLK_A) {
 			left.downs += 1;
 			if (phase == Phase::Approach && target_lane > 0) target_lane -= 1;
@@ -307,6 +383,7 @@ bool PlayMode::handle_event(SDL_Event const &evt, glm::uvec2 const &window_size)
 }
 
 void PlayMode::update(float elapsed) {
+	if (phase == Phase::GameOver) return;
 	{ //S eases down toward the floor speed, W back up to whatever the level rolls at:
 		float want = slowing ? logic.min_speed() : logic.default_speed();
 		speed += (1.0f - std::exp(-elapsed / 0.25f)) * (want - speed);
@@ -343,6 +420,13 @@ void PlayMode::update(float elapsed) {
 				Sound::play(*avoid_sample, 0.9f);
 			}
 			logic.settle();
+			if (logic.dead()) {
+				Sound::stop_all_samples();
+				warn_playing.clear();
+				Sound::play(*game_end_sample, 1.0f);
+				phase = Phase::GameOver;
+				return;
+			}
 			//hold the warnings back until the cart is nearly out of the tunnel, so they land in
 			//the approach where the choice is actually made rather than ending before it starts
 			float remaining = (TunnelLength - cart_s) / std::max(TunnelSpeed, speed);
@@ -418,33 +502,44 @@ void PlayMode::draw(glm::uvec2 const &drawable_size) {
 		rock.draw(*camera);
 	}
 
-	// {
-	// 	glDisable(GL_DEPTH_TEST);
-	// 	float aspect = float(drawable_size.x) / float(drawable_size.y);
-	// 	DrawLines lines(glm::mat4(
-	// 		1.0f / aspect, 0.0f, 0.0f, 0.0f,
-	// 		0.0f, 1.0f, 0.0f, 0.0f,
-	// 		0.0f, 0.0f, 1.0f, 0.0f,
-	// 		0.0f, 0.0f, 0.0f, 1.0f
-	// 	));
+	{
+		glDisable(GL_DEPTH_TEST);
+		float aspect = float(drawable_size.x) / float(drawable_size.y);
+		DrawLines lines(glm::mat4(
+			1.0f / aspect, 0.0f, 0.0f, 0.0f,
+			0.0f, 1.0f, 0.0f, 0.0f,
+			0.0f, 0.0f, 1.0f, 0.0f,
+			0.0f, 0.0f, 0.0f, 1.0f
+		));
 
-	// 	char const *phase_name = (phase == Phase::Approach ? "APPROACH"
-	// 	                        : phase == Phase::Branch   ? "BRANCH" : "TUNNEL");
-	// 	std::string hud = std::string(phase_name)
-	// 		+ "  lane " + std::to_string(target_lane)
-	// 		+ "  y " + std::to_string(int(cart_s))
-	// 		+ "  cleared " + std::to_string(junctions_cleared);
+		//drawn twice, one pixel apart, so it stays legible over both rock and void:
+		auto text = [&](std::string const &str, float x, float y, float h) {
+			lines.draw_text(str, glm::vec3(x, y, 0.0f),
+				glm::vec3(h, 0.0f, 0.0f), glm::vec3(0.0f, h, 0.0f),
+				glm::u8vec4(0x00, 0x00, 0x00, 0x00));
+			float ofs = 2.0f / float(drawable_size.y);
+			lines.draw_text(str, glm::vec3(x + ofs, y + ofs, 0.0f),
+				glm::vec3(h, 0.0f, 0.0f), glm::vec3(0.0f, h, 0.0f),
+				glm::u8vec4(0xff, 0xff, 0xff, 0x00));
+		};
 
-	// 	constexpr float H = 0.09f;
-	// 	lines.draw_text(hud,
-	// 		glm::vec3(-aspect + 0.1f * H, -1.0 + 0.1f * H, 0.0),
-	// 		glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-	// 		glm::u8vec4(0x00, 0x00, 0x00, 0x00));
-	// 	float ofs = 2.0f / drawable_size.y;
-	// 	lines.draw_text(hud,
-	// 		glm::vec3(-aspect + 0.1f * H + ofs, -1.0 + + 0.1f * H + ofs, 0.0),
-	// 		glm::vec3(H, 0.0f, 0.0f), glm::vec3(0.0f, H, 0.0f),
-	// 		glm::u8vec4(0xff, 0xff, 0xff, 0x00));
-	// }
+		for (int i = 0; i < 5; ++i) {
+			int left = logic.hp - i * 2;
+			float fill = (left >= 2 ? 1.0f : left == 1 ? 0.5f : 0.0f);
+			draw_heart(lines, glm::vec2(-aspect + 0.10f + float(i) * 0.115f, -0.84f), 0.045f, fill,
+				glm::u8vec4(0xe0, 0x30, 0x40, 0xff));
+		}
+		text(mine::level_name(logic.level()), -aspect + 0.055f, -0.98f, 0.07f);
+		text("CLEARED " + std::to_string(logic.junctions_cleared), -aspect + 0.055f, 0.90f, 0.07f);
+
+		if (phase == Phase::GameOver) {
+			text("RUN OVER", -0.42f, 0.10f, 0.20f);
+			text("cleared " + std::to_string(logic.junctions_cleared) + " junctions", -0.52f, -0.06f, 0.08f);
+			text("press R to ride again", -0.48f, -0.20f, 0.08f);
+		} else {
+			text("A / D  lane     S  slow     W  fast     R  restart",
+				-aspect + 0.055f, 0.80f, 0.05f);
+		}
+	}
 	GL_ERRORS();
 }

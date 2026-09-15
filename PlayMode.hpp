@@ -38,6 +38,7 @@ struct PlayMode : Mode {
 		Approach, //shared straight, lane still changeable
 		Branch,   //past the split, committed
 		Tunnel,
+		GameOver, //nothing moves and nothing but R is read
 	};
 	Phase phase = Phase::Approach;
 
@@ -126,6 +127,7 @@ struct PlayMode : Mode {
 	void arm_warnings(float start_delay, float budget);
 	void update_warnings(float elapsed);
 	void update_rumble(float elapsed);
+	void restart();
 	void spawn_danger();
 	void animate_danger(float elapsed);
 };
