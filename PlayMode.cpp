@@ -93,15 +93,6 @@ Load< Sound::Sample > hit_rocks_sample (LoadTagDefault, sample_loader("sounds/hi
 Load< Sound::Sample > avoid_sample     (LoadTagDefault, sample_loader("sounds/avoid-sound.wav"));
 Load< Sound::Sample > game_end_sample  (LoadTagDefault, sample_loader("sounds/game-end.wav"));
 
-//matches "cart_root" and "cart_root.002" alike:
-static bool name_is(std::string const &name, std::string const &want) {
-	if (name.compare(0, want.size(), want) != 0) return false;
-	if (name.size() == want.size()) return true;
-	//accept exactly ".NNN"
-	return name.size() == want.size() + 4 && name[want.size()] == '.';
-}
-
-
 PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_scene),
                        rock(*rock_scene), visual_rng(std::random_device{}()) {
 	//tunnel-cart has no camera of its own and borrows this one:
@@ -118,21 +109,21 @@ PlayMode::PlayMode() : junction(*cave_scene), tunnel(*tunnel_scene), cart(*cart_
 	}
 
 	for (auto &transform : cart.transforms) {
-		if (name_is(transform.name, "cart_root")) cart_root = &transform;
+		if (transform.name == "cart_root") cart_root = &transform;
 	}
 	if (cart_root == nullptr) throw std::runtime_error("cart-front.scene has no 'cart_root' transform.");
 
 	for (int i = 0; i < BatCount; ++i) {
 		bats[size_t(i)] = *bat_scene;
 		for (auto &t : bats[size_t(i)].transforms) {
-			if (name_is(t.name, "bat_root")) bat_root[size_t(i)] = &t;
-			else if (name_is(t.name, "bat_wing_left")) bat_wing_l[size_t(i)] = &t;
-			else if (name_is(t.name, "bat_wing_right")) bat_wing_r[size_t(i)] = &t;
+			if (t.name == "bat_root") bat_root[size_t(i)] = &t;
+			else if (t.name == "bat_wing_left") bat_wing_l[size_t(i)] = &t;
+			else if (t.name == "bat_wing_right") bat_wing_r[size_t(i)] = &t;
 		}
 		if (!bat_root[size_t(i)]) throw std::runtime_error("bat.scene has no 'bat_root' transform.");
 	}
 	for (auto &t : rock.transforms) {
-		if (name_is(t.name, "rock_root")) rock_root = &t;
+		if (t.name == "rock_root") rock_root = &t;
 	}
 	if (rock_root == nullptr) throw std::runtime_error("rock.scene has no 'rock_root' transform.");
 
